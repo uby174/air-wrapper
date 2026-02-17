@@ -1,0 +1,46 @@
+{
+  "name": "@ai-wrapper/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "dev:worker": "tsx watch src/jobs/worker-entry.ts",
+    "build": "tsc -b",
+    "start": "node dist/index.js",
+    "worker": "tsx src/jobs/worker-entry.ts",
+    "db:migrate": "tsx src/db/migrate.ts",
+    "db:push": "pnpm db:migrate",
+    "db:smoke": "tsx src/db/smoke-chunks.ts",
+    "privacy:retention": "tsx src/db/run-retention.ts",
+    "jobs:smoke": "tsx src/jobs/smoke-sequential.ts",
+    "test": "vitest run",
+    "lint": "eslint src --ext .ts",
+    "typecheck": "tsc -b --pretty false"
+  },
+  "dependencies": {
+    "@ai-wrapper/core": "workspace:*",
+    "@ai-wrapper/providers": "workspace:*",
+    "@ai-wrapper/rag": "workspace:*",
+    "@ai-wrapper/shared": "workspace:*",
+    "@hono/node-server": "^1.13.7",
+    "@hono/zod-validator": "^0.4.2",
+    "bullmq": "^5.58.0",
+    "dotenv": "^16.4.7",
+    "hono": "^4.7.2",
+    "ioredis": "^5.7.0",
+    "pdf-parse": "^1.1.1",
+    "pg": "^8.13.3",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "@types/pg": "^8.11.11",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2",
+    "vitest": "^3.2.4"
+  }
+}
