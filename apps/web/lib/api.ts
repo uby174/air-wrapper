@@ -1,6 +1,12 @@
-import { getLocalSession } from '@/lib/session';
+import { clearLocalSession, getLocalSession } from '@/lib/session';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8787';
+
+const redirectToLoginForAuth = (): void => {
+  if (typeof window === 'undefined') return;
+  if (window.location.pathname === '/login') return;
+  window.location.assign('/login?reason=session-expired');
+};
 
 export const callApi = async <T>(path: string, init?: RequestInit): Promise<T> => {
   const headers = new Headers(init?.headers);
@@ -20,6 +26,10 @@ export const callApi = async <T>(path: string, init?: RequestInit): Promise<T> =
   });
   if (!response.ok) {
     const body = await response.text();
+    if (response.status === 401 && !path.startsWith('/v1/auth/')) {
+      clearLocalSession();
+      redirectToLoginForAuth();
+    }
     throw new Error(`API request failed (${response.status}): ${body}`);
   }
   return response.json() as Promise<T>;
