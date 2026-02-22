@@ -83,24 +83,34 @@ const MODEL_BY_TASK_AND_PROVIDER: Record<TaskType, Record<ProviderName, string>>
   SIMPLE: {
     openai: 'gpt-4o-mini',
     anthropic: 'claude-3-5-haiku-latest',
-    google: 'gemini-flash-latest'
+    google: 'gemini-flash-latest',
+    ollama: 'mistral-small3'
   },
   MEDIUM: {
     openai: 'gpt-4.1-mini',
     anthropic: 'claude-3-5-haiku-latest',
-    google: 'gemini-pro-latest'
+    google: 'gemini-pro-latest',
+    ollama: 'mistral-small3'
   },
   COMPLEX: {
     openai: 'gpt-4.1',
     anthropic: 'claude-3-5-sonnet-latest',
-    google: 'gemini-pro-latest'
+    google: 'gemini-pro-latest',
+    ollama: 'mistral-small3'
+  },
+  LOCAL: {
+    openai: 'gpt-4o-mini',
+    anthropic: 'claude-3-5-haiku-latest',
+    google: 'gemini-flash-latest',
+    ollama: 'mistral-small3'
   }
 };
 
 const PRICE_TABLE_BY_PROVIDER: Record<ProviderName, PriceTable> = {
   openai: { inputPerMillion: 0.15, outputPerMillion: 0.6 },
   anthropic: { inputPerMillion: 0.25, outputPerMillion: 1.25 },
-  google: { inputPerMillion: 0.1, outputPerMillion: 0.3 }
+  google: { inputPerMillion: 0.1, outputPerMillion: 0.3 },
+  ollama: { inputPerMillion: 0, outputPerMillion: 0 }
 };
 
 const PROVIDER_FALLBACK_ORDER: ProviderName[] = ['openai', 'anthropic', 'google'];
@@ -755,7 +765,7 @@ app.post(routes.chat, zValidator('json', chatRequestSchema), async (c) => {
   const taskType = await classifyTask(clean, { classifyAmbiguous: classifyAmbiguousTask });
   const route = routeModel(taskType);
   const providerName = selectProviderForTask(taskType, payload.provider);
-  const key = cacheKeyForChat({ provider: route.provider, message: clean });
+  const key = cacheKeyForChat({ provider: route.provider as 'openai' | 'anthropic' | 'google', message: clean });
 
   if (!providerName) {
     await safeWriteUsageEvent({
