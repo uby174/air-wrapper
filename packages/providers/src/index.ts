@@ -735,7 +735,11 @@ export class OllamaProvider implements LLMProvider {
 
   async generateText(input: GenerateTextParams): Promise<GenerateTextResult> {
     const messages = input.messages.map((m) => ({ role: m.role, content: m.content }));
-    const body = { model: input.model, messages, stream: false };
+    const options: Record<string, unknown> = {};
+    if (input.temperature !== undefined) options.temperature = input.temperature;
+    if (input.maxTokens !== undefined) options.num_predict = input.maxTokens;
+    const body: Record<string, unknown> = { model: input.model, messages, stream: false };
+    if (Object.keys(options).length > 0) body.options = options;
 
     const resp = await fetch(`${this.baseUrl}/api/chat`, {
       method: 'POST',

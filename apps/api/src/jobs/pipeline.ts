@@ -59,30 +59,40 @@ if (ollamaBaseUrl) {
 
 const PROVIDER_FALLBACK_ORDER: ProviderName[] = ['openai', 'anthropic', 'google', 'ollama'];
 
+const OLLAMA_DEFAULT_MODEL = process.env.OLLAMA_MODEL ?? 'qwen2.5:3b';
+
+// Domain-specific expert models built from infra/ollama Modelfiles.
+// Fall back to the default Ollama model if the domain model is not configured.
+const VERTICAL_OLLAMA_MODEL: Record<string, string> = {
+  legal_contract_analysis: process.env.OLLAMA_LEGAL_MODEL ?? 'legal-analyst:3b',
+  medical_research_summary: process.env.OLLAMA_MEDICAL_MODEL ?? 'medical-analyst:3b',
+  financial_report_analysis: process.env.OLLAMA_FINANCIAL_MODEL ?? 'financial-analyst:3b'
+};
+
 const MODEL_BY_TASK_AND_PROVIDER: Record<TaskType, Record<ProviderName, string>> = {
   SIMPLE: {
     openai: 'gpt-4o-mini',
     anthropic: 'claude-3-5-haiku-latest',
     google: 'gemini-flash-latest',
-    ollama: process.env.OLLAMA_MODEL ?? 'qwen2.5:3b'
+    ollama: OLLAMA_DEFAULT_MODEL
   },
   MEDIUM: {
     openai: 'gpt-4.1-mini',
     anthropic: 'claude-3-5-haiku-latest',
     google: 'gemini-pro-latest',
-    ollama: process.env.OLLAMA_MODEL ?? 'qwen2.5:3b'
+    ollama: OLLAMA_DEFAULT_MODEL
   },
   COMPLEX: {
     openai: 'gpt-4.1',
     anthropic: 'claude-3-5-sonnet-latest',
     google: 'gemini-pro-latest',
-    ollama: process.env.OLLAMA_MODEL ?? 'qwen2.5:3b'
+    ollama: OLLAMA_DEFAULT_MODEL
   },
   LOCAL: {
     openai: 'gpt-4o-mini',
     anthropic: 'claude-3-5-haiku-latest',
     google: 'gemini-flash-latest',
-    ollama: process.env.OLLAMA_MODEL ?? 'qwen2.5:3b'
+    ollama: OLLAMA_DEFAULT_MODEL
   }
 };
 
@@ -739,6 +749,7 @@ const callLlmWithFallback = async (params: {
   messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
   maxTokens: number;
   temperature: number;
+  ollamaModelOverride?: string;
 }): Promise<{ providerName: ProviderName; result: GenerateTextResult; model: string }> => {
   let lastError: unknown = null;
 
@@ -746,7 +757,10 @@ const callLlmWithFallback = async (params: {
     const provider = providers[providerName];
     if (!provider) continue;
 
-    const model = MODEL_BY_TASK_AND_PROVIDER[params.taskType][providerName];
+    const model =
+      providerName === 'ollama' && params.ollamaModelOverride
+        ? params.ollamaModelOverride
+        : MODEL_BY_TASK_AND_PROVIDER[params.taskType][providerName];
 
     try {
       const result = await provider.generateText({
@@ -973,12 +987,15 @@ export const processAiJob = async (payloadRaw: AiJobQueuePayload): Promise<void>
     result: GenerateTextResult;
   }> = [];
 
+  const ollamaModelOverride = VERTICAL_OLLAMA_MODEL[vertical.id];
+
   const generation = await callLlmWithFallback({
     taskType,
     order: generationOrder,
     messages,
     maxTokens,
-    temperature
+    temperature,
+    ollamaModelOverride
   });
   usageCallRecords.push({
     providerName: generation.providerName,
@@ -1006,7 +1023,8 @@ export const processAiJob = async (payloadRaw: AiJobQueuePayload): Promise<void>
           order: generationOrder,
           messages: enrichmentMessages,
           maxTokens: Math.max(maxTokens, ENRICHMENT_MIN_MAX_TOKENS[vertical.id] ?? 2600),
-          temperature: Math.min(temperature, 0.3)
+          temperature: Math.min(temperature, 0.3),
+          ollamaModelOverride
         });
 
         usageCallRecords.push({
