@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-const providerNameSchema = z.enum(['openai', 'anthropic', 'google']);
+const providerNameSchema = z.enum(['openai', 'anthropic', 'google', 'ollama']);
 
 const textInputSchema = z.object({
   type: z.literal('text'),

@@ -14,7 +14,7 @@ import {
   type ProviderName,
   type TaskType
 } from '@ai-wrapper/core';
-import { AnthropicProvider, GoogleProvider, OpenAIProvider, type LLMProvider, type ProviderUsage } from '@ai-wrapper/providers';
+import { AnthropicProvider, GoogleProvider, OllamaProvider, OpenAIProvider, type LLMProvider, type ProviderUsage } from '@ai-wrapper/providers';
 import { chunkText, fakeEmbedding, retrieveTopK, type Chunk } from '@ai-wrapper/rag';
 import { chatRequestSchema, healthSchema } from '@ai-wrapper/shared';
 import { Hono } from 'hono';
@@ -79,30 +79,35 @@ if (googleApiKey) {
   providers.google = new GoogleProvider({ apiKey: googleApiKey });
 }
 
+const ollamaBaseUrl = process.env.OLLAMA_BASE_URL?.trim();
+if (ollamaBaseUrl) {
+  providers.ollama = new OllamaProvider({ baseUrl: ollamaBaseUrl });
+}
+
 const MODEL_BY_TASK_AND_PROVIDER: Record<TaskType, Record<ProviderName, string>> = {
   SIMPLE: {
     openai: 'gpt-4o-mini',
     anthropic: 'claude-3-5-haiku-latest',
     google: 'gemini-flash-latest',
-    ollama: 'mistral-small3'
+    ollama: process.env.OLLAMA_MODEL ?? 'qwen2.5:3b'
   },
   MEDIUM: {
     openai: 'gpt-4.1-mini',
     anthropic: 'claude-3-5-haiku-latest',
     google: 'gemini-pro-latest',
-    ollama: 'mistral-small3'
+    ollama: process.env.OLLAMA_MODEL ?? 'qwen2.5:3b'
   },
   COMPLEX: {
     openai: 'gpt-4.1',
     anthropic: 'claude-3-5-sonnet-latest',
     google: 'gemini-pro-latest',
-    ollama: 'mistral-small3'
+    ollama: process.env.OLLAMA_MODEL ?? 'qwen2.5:3b'
   },
   LOCAL: {
     openai: 'gpt-4o-mini',
     anthropic: 'claude-3-5-haiku-latest',
     google: 'gemini-flash-latest',
-    ollama: 'mistral-small3'
+    ollama: process.env.OLLAMA_MODEL ?? 'qwen2.5:3b'
   }
 };
 
@@ -113,7 +118,7 @@ const PRICE_TABLE_BY_PROVIDER: Record<ProviderName, PriceTable> = {
   ollama: { inputPerMillion: 0, outputPerMillion: 0 }
 };
 
-const PROVIDER_FALLBACK_ORDER: ProviderName[] = ['openai', 'anthropic', 'google'];
+const PROVIDER_FALLBACK_ORDER: ProviderName[] = ['openai', 'anthropic', 'google', 'ollama'];
 
 const parseTaskType = (raw: string): TaskType | null => {
   const matched = raw.toUpperCase().match(/\b(SIMPLE|MEDIUM|COMPLEX)\b/);

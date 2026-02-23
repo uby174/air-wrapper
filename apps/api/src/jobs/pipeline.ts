@@ -11,6 +11,7 @@ import { evaluateVerticalGuardrails, getVertical, type VerticalInputType } from 
 import {
   AnthropicProvider,
   GoogleProvider,
+  OllamaProvider,
   OpenAIProvider,
   type GenerateTextResult,
   type LLMProvider,
@@ -51,32 +52,37 @@ if (googleApiKey) {
   providers.google = new GoogleProvider({ apiKey: googleApiKey });
 }
 
-const PROVIDER_FALLBACK_ORDER: ProviderName[] = ['openai', 'anthropic', 'google'];
+const ollamaBaseUrl = process.env.OLLAMA_BASE_URL?.trim();
+if (ollamaBaseUrl) {
+  providers.ollama = new OllamaProvider({ baseUrl: ollamaBaseUrl });
+}
+
+const PROVIDER_FALLBACK_ORDER: ProviderName[] = ['openai', 'anthropic', 'google', 'ollama'];
 
 const MODEL_BY_TASK_AND_PROVIDER: Record<TaskType, Record<ProviderName, string>> = {
   SIMPLE: {
     openai: 'gpt-4o-mini',
     anthropic: 'claude-3-5-haiku-latest',
     google: 'gemini-flash-latest',
-    ollama: 'mistral-small3'
+    ollama: process.env.OLLAMA_MODEL ?? 'qwen2.5:3b'
   },
   MEDIUM: {
     openai: 'gpt-4.1-mini',
     anthropic: 'claude-3-5-haiku-latest',
     google: 'gemini-pro-latest',
-    ollama: 'mistral-small3'
+    ollama: process.env.OLLAMA_MODEL ?? 'qwen2.5:3b'
   },
   COMPLEX: {
     openai: 'gpt-4.1',
     anthropic: 'claude-3-5-sonnet-latest',
     google: 'gemini-pro-latest',
-    ollama: 'mistral-small3'
+    ollama: process.env.OLLAMA_MODEL ?? 'qwen2.5:3b'
   },
   LOCAL: {
     openai: 'gpt-4o-mini',
     anthropic: 'claude-3-5-haiku-latest',
     google: 'gemini-flash-latest',
-    ollama: 'mistral-small3'
+    ollama: process.env.OLLAMA_MODEL ?? 'qwen2.5:3b'
   }
 };
 

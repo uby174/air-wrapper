@@ -1,4 +1,4 @@
-export type ProviderName = 'openai' | 'anthropic' | 'google';
+export type ProviderName = 'openai' | 'anthropic' | 'google' | 'ollama';
 export type ProviderAction = 'generateText' | 'embed';
 export type MessageRole = 'system' | 'user' | 'assistant';
 
@@ -690,6 +690,7 @@ export interface ProviderConfig {
   openaiApiKey?: string;
   anthropicApiKey?: string;
   googleApiKey?: string;
+  ollamaBaseUrl?: string;
 }
 
 const fallbackReply = (provider: ProviderName, user: string): string =>
@@ -698,7 +699,8 @@ const fallbackReply = (provider: ProviderName, user: string): string =>
 const LEGACY_MODELS: Record<ProviderName, string> = {
   openai: 'gpt-4o-mini',
   anthropic: 'claude-3-5-sonnet-latest',
-  google: 'gemini-pro-latest'
+  google: 'gemini-pro-latest',
+  ollama: process.env.OLLAMA_MODEL ?? 'qwen2.5:3b'
 };
 
 const toLegacyAdapter = (providerName: ProviderName, provider: LLMProvider | undefined): ProviderAdapter => ({
@@ -718,6 +720,71 @@ const toLegacyAdapter = (providerName: ProviderName, provider: LLMProvider | und
   }
 });
 
+export interface OllamaProviderConfig {
+  baseUrl: string;
+  model?: string;
+}
+
+export class OllamaProvider implements LLMProvider {
+  readonly name: ProviderName = 'ollama';
+  private readonly baseUrl: string;
+
+  constructor(config: OllamaProviderConfig) {
+    this.baseUrl = config.baseUrl.replace(/\/$/, '');
+  }
+
+  async generateText(input: GenerateTextParams): Promise<GenerateTextResult> {
+    const messages = input.messages.map((m) => ({ role: m.role, content: m.content }));
+    const body = { model: input.model, messages, stream: false };
+
+    const resp = await fetch(`${this.baseUrl}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+
+    if (!resp.ok) {
+      throw new ProviderRequestError({
+        message: `Ollama error ${resp.status}`,
+        provider: 'ollama',
+        model: input.model,
+        status: resp.status,
+        retryable: resp.status >= 500
+      });
+    }
+
+    const data = await resp.json() as { message?: { content?: string }; prompt_eval_count?: number; eval_count?: number };
+    const text = data.message?.content ?? '';
+    const usage: ProviderUsage = {
+      inputTokens: data.prompt_eval_count,
+      outputTokens: data.eval_count
+    };
+
+    return { text, usage };
+  }
+
+  async embed(input: EmbedParams): Promise<EmbedResult> {
+    const resp = await fetch(`${this.baseUrl}/api/embed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: input.model, input: input.inputs })
+    });
+
+    if (!resp.ok) {
+      throw new ProviderRequestError({
+        message: `Ollama embed error ${resp.status}`,
+        provider: 'ollama',
+        model: input.model,
+        status: resp.status,
+        retryable: resp.status >= 500
+      });
+    }
+
+    const data = await resp.json() as { embeddings?: number[][] };
+    return { vectors: data.embeddings ?? [] };
+  }
+}
+
 export const createProviderAdapters = (config: ProviderConfig): Record<ProviderName, ProviderAdapter> => {
   const providers: Partial<Record<ProviderName, LLMProvider>> = {};
 
@@ -733,9 +800,14 @@ export const createProviderAdapters = (config: ProviderConfig): Record<ProviderN
     providers.google = new GoogleProvider({ apiKey: config.googleApiKey });
   }
 
+  if (config.ollamaBaseUrl) {
+    providers.ollama = new OllamaProvider({ baseUrl: config.ollamaBaseUrl });
+  }
+
   return {
     openai: toLegacyAdapter('openai', providers.openai),
     anthropic: toLegacyAdapter('anthropic', providers.anthropic),
-    google: toLegacyAdapter('google', providers.google)
+    google: toLegacyAdapter('google', providers.google),
+    ollama: toLegacyAdapter('ollama', providers.ollama)
   };
 };
