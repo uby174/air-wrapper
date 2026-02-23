@@ -591,6 +591,7 @@ export class GoogleProvider implements LLMProvider {
       headers: this.googleHeaders(),
       body: {
         requests: input.inputs.map((text) => ({
+          model: `models/${input.model}`,
           content: {
             parts: [{ text }]
           }
@@ -699,7 +700,7 @@ const fallbackReply = (provider: ProviderName, user: string): string =>
 const LEGACY_MODELS: Record<ProviderName, string> = {
   openai: 'gpt-4o-mini',
   anthropic: 'claude-3-5-sonnet-latest',
-  google: 'gemini-pro-latest',
+  google: 'gemini-2.5-flash',
   ollama: process.env.OLLAMA_MODEL ?? 'qwen2.5:3b'
 };
 

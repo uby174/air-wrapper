@@ -73,25 +73,25 @@ const MODEL_BY_TASK_AND_PROVIDER: Record<TaskType, Record<ProviderName, string>>
   SIMPLE: {
     openai: 'gpt-4o-mini',
     anthropic: 'claude-3-5-haiku-latest',
-    google: 'gemini-flash-latest',
+    google: 'gemini-2.5-flash',
     ollama: OLLAMA_DEFAULT_MODEL
   },
   MEDIUM: {
-    openai: 'gpt-4.1-mini',
+    openai: 'gpt-4o',
     anthropic: 'claude-3-5-haiku-latest',
-    google: 'gemini-pro-latest',
+    google: 'gemini-2.5-flash',
     ollama: OLLAMA_DEFAULT_MODEL
   },
   COMPLEX: {
-    openai: 'gpt-4.1',
+    openai: 'gpt-4o',
     anthropic: 'claude-3-5-sonnet-latest',
-    google: 'gemini-pro-latest',
+    google: 'gemini-2.5-pro',
     ollama: OLLAMA_DEFAULT_MODEL
   },
   LOCAL: {
     openai: 'gpt-4o-mini',
     anthropic: 'claude-3-5-haiku-latest',
-    google: 'gemini-flash-latest',
+    google: 'gemini-2.5-flash',
     ollama: OLLAMA_DEFAULT_MODEL
   }
 };
