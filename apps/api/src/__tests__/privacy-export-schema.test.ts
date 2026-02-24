@@ -2,7 +2,7 @@
  * Tests for privacy export bundle schema and privacy request types
  * Verifies: export bundle has all required keys, all DSR types accepted
  */
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { DATA_REQUEST_TYPES, type UserDataExportBundle } from '../db/privacy';
 
 // Validate the export bundle shape without touching the database

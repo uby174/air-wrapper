@@ -2,11 +2,7 @@
  * Tests for job lifecycle: create → fetch → result states
  * Also verifies: consent required gate, unknown use_case rejection
  */
-import { createHmac } from 'node:crypto';
-import { Hono } from 'hono';
-import { zValidator } from '@hono/zod-validator';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ApiVariables } from '../auth/middleware';
 
 // Hoisted mocks
 const {
@@ -122,23 +118,6 @@ vi.mock('@ai-wrapper/core/verticals', () => ({
   })
 }));
 
-// Build a minimal app with the jobs routes wired up from the main index
-// Rather than importing the real app (which has side effects), we build a focused test app
-const buildJobsTestApp = () => {
-  const app = new Hono<{ Variables: ApiVariables }>();
-
-  // Inject a mock authUser for all requests
-  app.use('*', async (c, next) => {
-    c.set('authUser', {
-      userId: 'test-user-uuid-0001-000000000001',
-      email: 'test@example.com',
-      plan: 'FREE'
-    });
-    await next();
-  });
-
-  return app;
-};
 
 const TEST_JOB_ID = 'b2e74bb2-ce1e-4af4-abd0-6aec264c62f4';
 const TEST_USER_ID = 'test-user-uuid-0001-000000000001';

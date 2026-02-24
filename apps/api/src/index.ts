@@ -219,7 +219,7 @@ const safeWriteUsageEvent = async (params: {
 const corpusChunks: Chunk[] = chunkText(
   'AI Wrapper provides provider-agnostic routing, guardrails, and RAG retrieval. ' +
     'Use pgvector in production for semantic search.'
-).map((text, idx) => ({
+).map((text: string, idx: number) => ({
   id: `seed-${idx}`,
   text,
   embedding: fakeEmbedding(text)
@@ -836,7 +836,7 @@ app.post(routes.chat, zValidator('json', chatRequestSchema), async (c) => {
 
   const queryEmbedding = fakeEmbedding(clean);
   const context = retrieveTopK(queryEmbedding, corpusChunks, 2)
-    .map((chunk) => `- ${chunk.text}`)
+    .map((chunk: Chunk) => `- ${chunk.text}`)
     .join('\n');
 
   const generationOrder = uniqueProviders([providerName, ...PROVIDER_FALLBACK_ORDER]);
