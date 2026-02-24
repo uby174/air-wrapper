@@ -29,7 +29,8 @@ export const jobOptionsSchema = z
     preferredProviders: z.array(providerNameSchema).min(1).max(3).optional(),
     temperature: z.number().min(0).max(2).optional(),
     maxTokens: z.number().int().min(64).max(8192).optional(),
-    timeoutMs: z.number().int().min(1_000).max(300_000).optional()
+    timeoutMs: z.number().int().min(1_000).max(300_000).optional(),
+    locale: z.string().min(2).max(35).optional()
   })
   .optional();
 

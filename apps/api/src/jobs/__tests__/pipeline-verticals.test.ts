@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const getJobRecordMock = vi.fn();
 const markJobSucceededMock = vi.fn();
 const writeUsageEventMock = vi.fn();
+const writeAuditEventMock = vi.fn();
 const generateTextMock = vi.fn();
 const chunkTextMock = vi.fn();
 const embedChunksMock = vi.fn();
@@ -17,6 +18,10 @@ vi.mock('../../db/jobs', () => ({
 
 vi.mock('../../db/usage-events', () => ({
   writeUsageEvent: writeUsageEventMock
+}));
+
+vi.mock('../../db/audit', () => ({
+  writeAuditEvent: writeAuditEventMock
 }));
 
 vi.mock('../../db/client', () => ({
@@ -138,6 +143,7 @@ describe('processAiJob vertical pipeline', () => {
     getJobRecordMock.mockReset();
     markJobSucceededMock.mockReset();
     writeUsageEventMock.mockReset();
+    writeAuditEventMock.mockReset();
     generateTextMock.mockReset();
     chunkTextMock.mockReset();
     embedChunksMock.mockReset();
@@ -244,10 +250,27 @@ describe('processAiJob vertical pipeline', () => {
   });
 
   it('coerces non-JSON model output into schema-compatible result', async () => {
-    generateTextMock.mockResolvedValue({
-      text: 'High-level analysis: termination is broad and indemnity is asymmetric.',
-      usage: { inputTokens: 90, outputTokens: 30 }
-    });
+    generateTextMock
+      .mockResolvedValueOnce({
+        text: 'High-level analysis: termination is broad and indemnity is asymmetric.',
+        usage: { inputTokens: 90, outputTokens: 30 }
+      })
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          summary: 'Termination is broad and indemnity is asymmetric.',
+          key_risks: [{ clause: 'Not provided', risk_level: 'high', explanation: 'Broad termination and indemnity exposure.' }],
+          obligations: [],
+          recommendations: [{ action: 'Narrow termination triggers', rationale: 'Reduce unilateral termination risk', priority: 'high' }],
+          missingInfo: ['governingLaw'],
+          confidence: { overall: 'medium', reasons: ['Only high-level text provided'] },
+          metadata: { useCaseKey: 'legal_contract_analysis', createdAt: new Date().toISOString() },
+          governingLaw: 'Not provided',
+          jurisdiction: 'Not provided',
+          disputeResolution: 'Not provided',
+          liabilityCap: 'Not provided'
+        }),
+        usage: { inputTokens: 120, outputTokens: 80 }
+      });
 
     getJobRecordMock.mockResolvedValue({
       ...baseJobRecord,
@@ -269,6 +292,7 @@ describe('processAiJob vertical pipeline', () => {
     await expect(processAiJob({ dbJobId: baseJobRecord.id })).resolves.toBeUndefined();
 
     expect(markJobSucceededMock).toHaveBeenCalledTimes(1);
+    expect(generateTextMock.mock.calls.length).toBeGreaterThanOrEqual(2);
     const [, persistedResult] = markJobSucceededMock.mock.calls[0] ?? [];
     expect(persistedResult).toMatchObject({
       summary: expect.any(String),
@@ -319,9 +343,11 @@ describe('processAiJob vertical pipeline', () => {
     expect(persistedResult).toMatchObject({
       summary: 'Clean summary',
       obligations: ['Pay premium on time'],
-      recommendations: ['Set autopay'],
-      disclaimer: 'Custom disclaimer'
+      disclaimer: 'This is an AI analysis and not legal advice.'
     });
+    expect((persistedResult as { recommendations: Array<{ action: string }> }).recommendations[0]?.action).toBe(
+      'Set autopay'
+    );
     expect(Array.isArray((persistedResult as { key_risks?: unknown[] }).key_risks)).toBe(true);
     expect((persistedResult as { key_risks: unknown[] }).key_risks.length).toBe(1);
   });
@@ -366,9 +392,11 @@ describe('processAiJob vertical pipeline', () => {
     expect(persistedResult).toMatchObject({
       summary: 'Recovered summary',
       obligations: ['Provide accurate disclosures'],
-      recommendations: ['Review termination clause'],
-      disclaimer: 'Recovered disclaimer'
+      disclaimer: 'This is an AI analysis and not legal advice.'
     });
+    expect((persistedResult as { recommendations: Array<{ action: string }> }).recommendations[0]?.action).toBe(
+      'Review termination clause'
+    );
     expect(Array.isArray((persistedResult as { key_risks?: unknown[] }).key_risks)).toBe(true);
     expect((persistedResult as { key_risks: unknown[] }).key_risks.length).toBe(1);
   });
@@ -456,9 +484,11 @@ describe('processAiJob vertical pipeline', () => {
     expect(persistedResult).toMatchObject({
       executive_summary: 'Revenue grew while margins compressed.',
       risk_flags: ['Margin compression'],
-      recommendations: ['Reduce operating costs'],
-      disclaimer: 'Finance disclaimer'
+      disclaimer: 'This analysis is informational and not investment advice.'
     });
+    expect((persistedResult as { recommendations: Array<{ action: string }> }).recommendations[0]?.action).toBe(
+      'Reduce operating costs'
+    );
     expect(Array.isArray((persistedResult as { key_metrics?: unknown[] }).key_metrics)).toBe(true);
     expect((persistedResult as { key_metrics: unknown[] }).key_metrics.length).toBe(1);
   });
@@ -658,5 +688,50 @@ describe('processAiJob vertical pipeline', () => {
     expect((persistedResult as { key_findings: unknown[] }).key_findings.length).toBeGreaterThan(0);
     expect((persistedResult as { limitations: unknown[] }).limitations.length).toBeGreaterThan(0);
     expect((persistedResult as { safety_notes: unknown[] }).safety_notes.length).toBeGreaterThan(0);
+  });
+
+  it('retries once to fix invalid structured JSON, audits failures, and throws structured 502 payload if still invalid', async () => {
+    generateTextMock
+      .mockResolvedValueOnce({
+        text: '{"foo":"bar"}',
+        usage: { inputTokens: 120, outputTokens: 20 }
+      })
+      .mockResolvedValueOnce({
+        text: '{"still":"invalid"}',
+        usage: { inputTokens: 80, outputTokens: 20 }
+      })
+      .mockResolvedValue({
+        text: '{"still":"invalid"}',
+        usage: { inputTokens: 80, outputTokens: 20 }
+      });
+
+    getJobRecordMock.mockResolvedValue({
+      ...baseJobRecord,
+      use_case: 'legal_contract_analysis',
+      input: {
+        input: {
+          type: 'text',
+          text: 'Review the indemnity clause.'
+        },
+        options: {
+          rag: {
+            enabled: false
+          }
+        }
+      }
+    });
+
+    const { processAiJob } = await import('../pipeline');
+    await expect(processAiJob({ dbJobId: baseJobRecord.id })).rejects.toThrow('STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED');
+
+    expect(generateTextMock.mock.calls.length).toBeGreaterThanOrEqual(3);
+    expect(writeAuditEventMock).toHaveBeenCalledTimes(2);
+    expect(markJobSucceededMock).not.toHaveBeenCalled();
+
+    const retryCallArgs = generateTextMock.mock.calls[generateTextMock.mock.calls.length - 1]?.[0] as
+      | { messages: Array<{ content: string }> }
+      | undefined;
+    const retryPrompt = retryCallArgs?.messages.map((m) => m.content).join('\n\n') ?? '';
+    expect(retryPrompt).toContain('Return ONLY corrected JSON matching the schema; no extra text.');
   });
 });

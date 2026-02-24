@@ -28,6 +28,7 @@ import {
 } from '@ai-wrapper/rag';
 import type { QueryResultRow } from 'pg';
 import { z } from 'zod';
+import { writeAuditEvent } from '../db/audit';
 import { query } from '../db/client';
 import { getJobRecord, markJobSucceeded } from '../db/jobs';
 import { writeUsageEvent } from '../db/usage-events';
@@ -201,6 +202,43 @@ const buildGenerationOrder = (taskType: TaskType, preferred: ProviderName[] | un
   return uniqueProviders([...userPreferred, routedProvider, ...PROVIDER_FALLBACK_ORDER]);
 };
 
+/**
+ * Repairs literal (unescaped) control characters inside JSON string values.
+ * LLMs frequently emit newlines and tabs verbatim inside string values instead of
+ * the required \\n / \\t escape sequences, making JSON.parse fail. This walks the
+ * raw text character-by-character and replaces bare control characters only when
+ * inside a string value, leaving structural whitespace untouched.
+ */
+const repairJsonLiteralControlChars = (raw: string): string => {
+  let result = '';
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i] as string;
+    if (escaped) {
+      result += ch;
+      escaped = false;
+    } else if (ch === '\\' && inString) {
+      result += ch;
+      escaped = true;
+    } else if (ch === '"') {
+      result += ch;
+      inString = !inString;
+    } else if (inString && ch === '\n') {
+      result += '\\n';
+    } else if (inString && ch === '\r') {
+      result += '\\r';
+    } else if (inString && ch === '\t') {
+      result += '\\t';
+    } else {
+      result += ch;
+    }
+  }
+
+  return result;
+};
+
 const extractJsonPayload = (raw: string): unknown => {
   const trimmed = raw.trim();
   if (!trimmed) return { answer: '', key_points: [] };
@@ -220,7 +258,13 @@ const extractJsonPayload = (raw: string): unknown => {
     try {
       return JSON.parse(candidate) as unknown;
     } catch {
-      // Continue attempts.
+      // Retry after repairing literal control characters inside string values.
+      // This is the most common cause of LLM JSON parse failures.
+      try {
+        return JSON.parse(repairJsonLiteralControlChars(candidate)) as unknown;
+      } catch {
+        // Continue to next candidate.
+      }
     }
   }
 
@@ -377,7 +421,15 @@ const coerceVerticalOutput = (verticalId: string, rawText: string, payload: unkn
           'obligations',
           'recommendations',
           'disclaimer'
-        ]) ?? {}),
+        ]) ??
+          extractKnownRecordFromString(rawText, [
+            'summary',
+            'key_risks',
+            'obligations',
+            'recommendations',
+            'disclaimer'
+          ]) ??
+          {}),
         ...(extractKnownRecordFromString(asObject.summary, [
           'summary',
           'key_risks',
@@ -387,13 +439,16 @@ const coerceVerticalOutput = (verticalId: string, rawText: string, payload: unkn
         ]) ?? {})
       };
 
-      const nestedSummary = extractJsonLikeStringField(summaryText, 'summary');
-      const nestedObligations = extractJsonLikeStringArrayField(summaryText, 'obligations');
-      const nestedRecommendations = extractJsonLikeStringArrayField(summaryText, 'recommendations');
-      const nestedDisclaimer = extractJsonLikeStringField(summaryText, 'disclaimer');
-      const nestedRisks = extractJsonLikeLegalRisks(summaryText);
+      // Fall back to rawText as extraction source when summaryText is empty (JSON parse failed).
+      const extractionSource = summaryText.length > 0 ? summaryText : rawText;
+
+      const nestedSummary = extractJsonLikeStringField(extractionSource, 'summary');
+      const nestedObligations = extractJsonLikeStringArrayField(extractionSource, 'obligations');
+      const nestedRecommendations = extractJsonLikeStringArrayField(extractionSource, 'recommendations');
+      const nestedDisclaimer = extractJsonLikeStringField(extractionSource, 'disclaimer');
+      const nestedRisks = extractJsonLikeLegalRisks(extractionSource);
       const summaryLooksJsonLike =
-        summaryText.trimStart().startsWith('```') || /"\s*summary\s*"\s*:/.test(summaryText);
+        extractionSource.trimStart().startsWith('```') || /"\s*summary\s*"\s*:/.test(extractionSource);
       const summaryFallback = summaryLooksJsonLike || summaryText.trim().length === 0 ? fallbackSummary : summaryText;
       const normalizedMergedRisks = Array.isArray(merged.key_risks) ? merged.key_risks : [];
       const normalizedMergedObligations = toStringArray(merged.obligations);
@@ -439,7 +494,15 @@ const coerceVerticalOutput = (verticalId: string, rawText: string, payload: unkn
           'key_findings',
           'limitations',
           'safety_notes'
-        ]) ?? {}),
+        ]) ??
+          extractKnownRecordFromString(rawText, [
+            'research_question',
+            'evidence_summary',
+            'key_findings',
+            'limitations',
+            'safety_notes'
+          ]) ??
+          {}),
         ...(extractKnownRecordFromString(asObject.evidence_summary, [
           'research_question',
           'evidence_summary',
@@ -449,15 +512,18 @@ const coerceVerticalOutput = (verticalId: string, rawText: string, payload: unkn
         ]) ?? {})
       };
 
-      const nestedResearchQuestion = extractJsonLikeStringField(evidenceSummaryText, 'research_question');
-      const nestedEvidenceSummary = extractJsonLikeStringField(evidenceSummaryText, 'evidence_summary');
-      const nestedFindings = extractJsonLikeStringArrayField(evidenceSummaryText, 'key_findings');
-      const nestedLimitations = extractJsonLikeStringArrayField(evidenceSummaryText, 'limitations');
-      const nestedSafetyNotes = extractJsonLikeStringArrayField(evidenceSummaryText, 'safety_notes');
+      // Fall back to rawText as extraction source when evidenceSummaryText is empty (JSON parse failed).
+      const extractionSource = evidenceSummaryText.length > 0 ? evidenceSummaryText : rawText;
+
+      const nestedResearchQuestion = extractJsonLikeStringField(extractionSource, 'research_question');
+      const nestedEvidenceSummary = extractJsonLikeStringField(extractionSource, 'evidence_summary');
+      const nestedFindings = extractJsonLikeStringArrayField(extractionSource, 'key_findings');
+      const nestedLimitations = extractJsonLikeStringArrayField(extractionSource, 'limitations');
+      const nestedSafetyNotes = extractJsonLikeStringArrayField(extractionSource, 'safety_notes');
       const summaryLooksJsonLike =
-        evidenceSummaryText.trimStart().startsWith('```') ||
-        /"\s*research_question\s*"\s*:/.test(evidenceSummaryText) ||
-        /"\s*evidence_summary\s*"\s*:/.test(evidenceSummaryText);
+        extractionSource.trimStart().startsWith('```') ||
+        /"\s*research_question\s*"\s*:/.test(extractionSource) ||
+        /"\s*evidence_summary\s*"\s*:/.test(extractionSource);
       const evidenceSummaryCandidate = nestedEvidenceSummary ?? (summaryLooksJsonLike ? '' : merged.evidence_summary);
       const mergedFindings = toStringArray(merged.key_findings);
       const mergedLimitations = toStringArray(merged.limitations);
@@ -486,7 +552,17 @@ const coerceVerticalOutput = (verticalId: string, rawText: string, payload: unkn
           'risk_flags',
           'recommendations',
           'disclaimer'
-        ]) ?? {}),
+        ]) ??
+          // When JSON parsing failed entirely asObject.answer === rawText but extractJsonPayload
+          // also failed on it, so we try rawText as a last-resort object source.
+          extractKnownRecordFromString(rawText, [
+            'executive_summary',
+            'key_metrics',
+            'risk_flags',
+            'recommendations',
+            'disclaimer'
+          ]) ??
+          {}),
         ...(extractKnownRecordFromString(asObject.executive_summary, [
           'executive_summary',
           'key_metrics',
@@ -496,13 +572,18 @@ const coerceVerticalOutput = (verticalId: string, rawText: string, payload: unkn
         ]) ?? {})
       };
 
-      const nestedExecutiveSummary = extractJsonLikeStringField(executiveSummaryText, 'executive_summary');
-      const nestedRiskFlags = extractJsonLikeStringArrayField(executiveSummaryText, 'risk_flags');
-      const nestedRecommendations = extractJsonLikeStringArrayField(executiveSummaryText, 'recommendations');
-      const nestedDisclaimer = extractJsonLikeStringField(executiveSummaryText, 'disclaimer');
-      const nestedMetrics = extractJsonLikeFinancialMetrics(executiveSummaryText);
+      // When JSON parsing failed, asObject.executive_summary is undefined (executiveSummaryText = '').
+      // Fall back to direct regex extraction from rawText in that case so we can still
+      // recover structured fields even when the outer parse produced no executive_summary.
+      const extractionSource = executiveSummaryText.length > 0 ? executiveSummaryText : rawText;
+
+      const nestedExecutiveSummary = extractJsonLikeStringField(extractionSource, 'executive_summary');
+      const nestedRiskFlags = extractJsonLikeStringArrayField(extractionSource, 'risk_flags');
+      const nestedRecommendations = extractJsonLikeStringArrayField(extractionSource, 'recommendations');
+      const nestedDisclaimer = extractJsonLikeStringField(extractionSource, 'disclaimer');
+      const nestedMetrics = extractJsonLikeFinancialMetrics(extractionSource);
       const summaryLooksJsonLike =
-        executiveSummaryText.trimStart().startsWith('```') || /"\s*executive_summary\s*"\s*:/.test(executiveSummaryText);
+        extractionSource.trimStart().startsWith('```') || /"\s*executive_summary\s*"\s*:/.test(extractionSource);
       const summaryCandidate = nestedExecutiveSummary ?? (summaryLooksJsonLike ? '' : merged.executive_summary);
       const normalizedMergedMetrics = Array.isArray(merged.key_metrics)
         ? merged.key_metrics
@@ -555,6 +636,225 @@ const parseValidatedOutput = (schema: z.ZodTypeAny, verticalId: string, rawText:
 
   if (direct.success) return direct.data;
   throw direct.error;
+};
+
+const hasStructuredSignal = (verticalId: string, rawText: string): boolean => {
+  const payload = extractJsonPayload(rawText);
+  if (!isRecord(payload)) return false;
+
+  const requiredSignalsByVertical: Record<string, string[]> = {
+    legal_contract_analysis: [
+      'executiveSummary',
+      'summary',
+      'evidenceQuotes',
+      'evidence_quotes',
+      'risks',
+      'key_risks',
+      'recommendations'
+    ],
+    medical_research_summary: [
+      'executiveSummary',
+      'researchQuestion',
+      'research_question',
+      'evidence_summary',
+      'evidenceQuotes',
+      'evidence_quotes',
+      'risks',
+      'key_findings'
+    ],
+    financial_report_analysis: [
+      'executiveSummary',
+      'executive_summary',
+      'evidenceQuotes',
+      'evidence_quotes',
+      'risks',
+      'key_metrics',
+      'risk_flags',
+      'recommendations'
+    ]
+  };
+
+  const signals = requiredSignalsByVertical[verticalId];
+  if (!signals) return true;
+  return signals.some((key) => key in payload);
+};
+
+type StructuredOutputValidationStage = 'initial' | 'enrichment';
+
+interface StructuredOutputValidationFailurePayload {
+  code: 'STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED';
+  statusCode: 502;
+  verticalId: string;
+  stage: StructuredOutputValidationStage;
+  retryAttempted: true;
+  message: string;
+  issues?: unknown[];
+  rawPreview: string;
+}
+
+class StructuredOutputValidationError extends Error {
+  statusCode = 502 as const;
+  payload: StructuredOutputValidationFailurePayload;
+
+  constructor(payload: StructuredOutputValidationFailurePayload) {
+    super(JSON.stringify(payload));
+    this.name = 'StructuredOutputValidationError';
+    this.payload = payload;
+  }
+}
+
+const summarizeIssues = (error: unknown): unknown[] | undefined => {
+  if (!(error instanceof z.ZodError)) return undefined;
+  return error.issues.map((issue) => ({
+    path: issue.path,
+    code: issue.code,
+    message: issue.message
+  }));
+};
+
+const truncateForAudit = (value: string, limit = 4000): string => {
+  if (value.length <= limit) return value;
+  return `${value.slice(0, limit)}...`;
+};
+
+const buildStructuredOutputFixMessages = (params: {
+  originalMessages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
+  invalidRawText: string;
+  verticalId: string;
+}): Array<{ role: 'system' | 'user' | 'assistant'; content: string }> => [
+  ...params.originalMessages,
+  { role: 'assistant', content: params.invalidRawText },
+  {
+    role: 'user',
+    content: [
+      `The previous response for vertical "${params.verticalId}" failed JSON/schema validation.`,
+      'Return ONLY corrected JSON matching the schema; no extra text.',
+      'Return exactly one valid JSON object.',
+      'Preserve meaning where possible. If information is missing, use "Not provided".'
+    ].join(' ')
+  }
+];
+
+const parseValidatedOutputWithRetry = async (params: {
+  schema: z.ZodTypeAny;
+  verticalId: string;
+  rawText: string;
+  stage: StructuredOutputValidationStage;
+  jobId: string;
+  userId: string;
+  originalMessages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
+  callParams: {
+    taskType: TaskType;
+    order: ProviderName[];
+    maxTokens: number;
+    temperature: number;
+    ollamaModelOverride?: string;
+  };
+}): Promise<{
+  output: unknown;
+  retryGeneration: { providerName: ProviderName; result: GenerateTextResult; model: string } | null;
+}> => {
+  try {
+    if (!hasStructuredSignal(params.verticalId, params.rawText)) {
+      throw new Error('Missing structured output fields in model response.');
+    }
+    return {
+      output: parseValidatedOutput(params.schema, params.verticalId, params.rawText),
+      retryGeneration: null
+    };
+  } catch (firstError) {
+    await Promise.resolve(
+      writeAuditEvent({
+        userId: params.userId,
+        action: 'job_structured_output_schema_validation_failed_attempt',
+        metadata: {
+          jobId: params.jobId,
+          verticalId: params.verticalId,
+          stage: params.stage,
+          attempt: 1,
+          issues: summarizeIssues(firstError),
+          rawPreview: truncateForAudit(params.rawText)
+        }
+      })
+    ).catch(() => {
+      // Non-blocking audit logging.
+    });
+
+    const retryMessages = buildStructuredOutputFixMessages({
+      originalMessages: params.originalMessages,
+      invalidRawText: params.rawText,
+      verticalId: params.verticalId
+    });
+
+    const retryGeneration = await callLlmWithFallback({
+      taskType: params.callParams.taskType,
+      order: params.callParams.order,
+      messages: retryMessages,
+      maxTokens: params.callParams.maxTokens,
+      temperature: Math.min(params.callParams.temperature, 0.2),
+      ollamaModelOverride: params.callParams.ollamaModelOverride
+    });
+
+    try {
+      if (!hasStructuredSignal(params.verticalId, retryGeneration.result.text)) {
+        throw new Error('Missing structured output fields in retry model response.');
+      }
+      return {
+        output: parseValidatedOutput(params.schema, params.verticalId, retryGeneration.result.text),
+        retryGeneration
+      };
+    } catch (secondError) {
+      const payload: StructuredOutputValidationFailurePayload = {
+        code: 'STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED',
+        statusCode: 502,
+        verticalId: params.verticalId,
+        stage: params.stage,
+        retryAttempted: true,
+        message: 'Model returned invalid structured JSON after one repair retry.',
+        issues: summarizeIssues(secondError),
+        rawPreview: truncateForAudit(retryGeneration.result.text)
+      };
+
+      await Promise.resolve(
+        writeAuditEvent({
+          userId: params.userId,
+          action: 'job_structured_output_schema_validation_failed_final',
+          metadata: {
+            jobId: params.jobId,
+            ...payload
+          }
+        })
+      ).catch(() => {
+        // Non-blocking audit logging.
+      });
+
+      throw new StructuredOutputValidationError(payload);
+    }
+  }
+};
+
+const attachRuntimeModelMetadata = (
+  verticalId: string,
+  output: unknown,
+  runtime: { providerName: ProviderName; model: string }
+): unknown => {
+  if (!isRecord(output)) return output;
+  const metadata = isRecord(output.metadata) ? output.metadata : {};
+  const createdAt =
+    typeof metadata.createdAt === 'string' && metadata.createdAt.trim().length > 0
+      ? metadata.createdAt
+      : new Date().toISOString();
+
+  return {
+    ...output,
+    metadata: {
+      ...metadata,
+      useCaseKey: typeof metadata.useCaseKey === 'string' && metadata.useCaseKey.trim().length > 0 ? metadata.useCaseKey : verticalId,
+      provider: runtime.providerName,
+      model: runtime.model,
+      createdAt
+    }
+  };
 };
 
 const arrayLength = (value: unknown): number => (Array.isArray(value) ? value.length : 0);
@@ -669,15 +969,17 @@ const buildSparseEnrichmentMessages = (params: {
       {
         role: 'system',
         content:
-          'You are a senior contracts counsel specializing in commercial risk review. Return strict JSON only. Do not use markdown code fences.'
+          'You are a senior contracts counsel specializing in commercial risk review. Return strict JSON only. No markdown code fences. Use only provided evidence and output "Not provided" for missing fields.'
       },
       {
         role: 'user',
         content: [
           'The prior response was too sparse and left structured arrays mostly empty.',
           'Return JSON with keys:',
-          '{"summary": string, "key_risks": [{"clause": string, "risk_level": "low|medium|high", "explanation": string}], "obligations": string[], "recommendations": string[], "disclaimer": string}.',
-          'Completeness requirements: include at least 4 key_risks and at least 3 recommendations when evidence exists.',
+          '{"executive_summary": string, "summary": string, "evidence_quotes": [{"quote": string, "source_ref": string, "relevance": string}], "risks": [{"title": string, "severity": "low|medium|high", "impact": string, "evidence_refs": string[], "status": "observed|potential|not_assessable"}], "key_risks": [{"clause": string, "risk_level": "low|medium|high", "explanation": string, "evidence_quote_refs": string[]}], "obligations": string[], "recommendations": string[], "missing_info": string[], "confidence": {"level": "low|medium|high", "score": number, "rationale": string}, "metadata": {"use_case": "legal_contract_analysis", "no_hallucination_mode": true, "not_provided_fields": string[]}, "contract_type": string, "parties": string, "governing_law": string, "jurisdiction": string, "dispute_resolution": string, "liability_cap": string, "disclaimer": string}.',
+          'Completeness requirements: include Executive Summary, Evidence Quotes, Risks, Recommendations, Missing Info, and Confidence every time.',
+          'Include at least 4 key_risks and at least 3 recommendations when evidence exists.',
+          'If governing_law/jurisdiction/dispute_resolution/liability_cap are missing, set them to "Not provided" and list them in missing_info.',
           'Contract content:',
           params.inputText,
           params.context ? `Retrieved context:\n${params.context}` : '',
@@ -694,15 +996,17 @@ const buildSparseEnrichmentMessages = (params: {
       {
         role: 'system',
         content:
-          'You are a clinical research methodologist and evidence synthesis specialist. Return strict JSON only. Do not use markdown code fences.'
+          'You are a clinical research methodologist and evidence synthesis specialist. Return strict JSON only. No markdown code fences. Use only provided evidence, no diagnosis/treatment advice, and output "Not provided" for missing fields.'
       },
       {
         role: 'user',
         content: [
           'The prior response was too sparse and left structured arrays mostly empty.',
           'Return JSON with keys:',
-          '{"research_question": string, "evidence_summary": string, "key_findings": string[], "limitations": string[], "safety_notes": string[], "not_medical_advice": true}.',
-          'Completeness requirements: include at least 5 key_findings, 4 limitations, and 4 safety_notes when evidence exists.',
+          '{"executive_summary": string, "research_question": string, "evidence_summary": string, "evidence_quotes": [{"quote": string, "source_ref": string, "relevance": string}], "risks": [{"title": string, "severity": "low|medium|high", "impact": string, "evidence_refs": string[], "status": "observed|potential|not_assessable"}], "key_findings": string[], "limitations": string[], "safety_notes": string[], "recommendations": string[], "missing_info": string[], "confidence": {"level": "low|medium|high", "score": number, "rationale": string}, "metadata": {"use_case": "medical_research_summary", "no_hallucination_mode": true, "not_provided_fields": string[]}, "study_design": string, "sample_size": string, "primary_endpoint": string, "effect_size_summary": string, "disclaimer": string, "not_medical_advice": true}.',
+          'Completeness requirements: include Executive Summary, Evidence Quotes, Risks, Recommendations, Missing Info, and Confidence every time.',
+          'Include at least 5 key_findings, 4 limitations, and 4 safety_notes when evidence exists.',
+          'If sample_size/study_design/primary_endpoint/effect_size_summary are missing, set them to "Not provided" and list them in missing_info.',
           'Prioritize study design, sample size, population, endpoints, effect direction/magnitude, and confidence limits when available.',
           'Medical research content:',
           params.inputText,
@@ -720,15 +1024,17 @@ const buildSparseEnrichmentMessages = (params: {
       {
         role: 'system',
         content:
-          'You are a senior equity research analyst specializing in forensic financial statement review. Return strict JSON only. Do not use markdown code fences.'
+          'You are a senior equity research analyst specializing in forensic financial statement review. Return strict JSON only. No markdown code fences. Use only provided evidence, do not give personalized investment advice, and output "Not provided" for missing fields.'
       },
       {
         role: 'user',
         content: [
           'The prior response was too sparse and left structured arrays mostly empty.',
           'Return JSON with keys:',
-          '{"executive_summary": string, "key_metrics": [{"metric": string, "value": string, "interpretation": string}], "risk_flags": string[], "recommendations": string[], "disclaimer": string}.',
-          'Completeness requirements: include at least 4 key_metrics, 4 risk_flags, and 4 recommendations when evidence exists.',
+          '{"executive_summary": string, "evidence_quotes": [{"quote": string, "source_ref": string, "relevance": string}], "risks": [{"title": string, "severity": "low|medium|high", "impact": string, "evidence_refs": string[], "status": "observed|potential|not_assessable"}], "key_metrics": [{"metric": string, "value": string, "interpretation": string}], "risk_flags": string[], "recommendations": string[], "missing_info": string[], "confidence": {"level": "low|medium|high", "score": number, "rationale": string}, "metadata": {"use_case": "financial_report_analysis", "no_hallucination_mode": true, "not_provided_fields": string[]}, "reporting_period": string, "revenue_numbers": string, "liquidity_position": string, "disclaimer": string}.',
+          'Completeness requirements: include Executive Summary, Evidence Quotes, Risks, Recommendations, Missing Info, and Confidence every time.',
+          'Include at least 4 key_metrics, 4 risk_flags, and 4 recommendations when evidence exists.',
+          'If reporting_period/revenue_numbers/liquidity_position are missing, set them to "Not provided" and list them in missing_info.',
           'Financial report content:',
           params.inputText,
           params.context ? `Retrieved context:\n${params.context}` : '',
@@ -973,7 +1279,8 @@ export const processAiJob = async (payloadRaw: AiJobQueuePayload): Promise<void>
   const promptMessages = vertical.promptTemplate({
     inputText: guardedInputText,
     context,
-    useCase: vertical.id
+    useCase: vertical.id,
+    locale: options?.locale
   });
 
   if (promptMessages.length === 0) {
@@ -1003,10 +1310,39 @@ export const processAiJob = async (payloadRaw: AiJobQueuePayload): Promise<void>
     result: generation.result
   });
 
-  let output = parseValidatedOutput(vertical.outputSchema, vertical.id, generation.result.text);
+  const parsedInitial = await parseValidatedOutputWithRetry({
+    schema: vertical.outputSchema,
+    verticalId: vertical.id,
+    rawText: generation.result.text,
+    stage: 'initial',
+    jobId: record.id,
+    userId: record.user_id,
+    originalMessages: messages,
+    callParams: {
+      taskType,
+      order: generationOrder,
+      maxTokens,
+      temperature,
+      ollamaModelOverride
+    }
+  });
+  const effectiveInitialGeneration = parsedInitial.retryGeneration ?? generation;
+  if (parsedInitial.retryGeneration) {
+    usageCallRecords.push({
+      providerName: parsedInitial.retryGeneration.providerName,
+      requestText: [...messages, { role: 'assistant' as const, content: generation.result.text }].map((m) => m.content).join('\n\n'),
+      result: parsedInitial.retryGeneration.result
+    });
+  }
+
+  let output = parsedInitial.output;
   if (vertical.postProcess) {
     output = await vertical.postProcess(output);
   }
+  output = attachRuntimeModelMetadata(vertical.id, output, {
+    providerName: effectiveInitialGeneration.providerName,
+    model: effectiveInitialGeneration.model
+  });
 
   if (shouldAttemptSparseEnrichment(vertical.id, guardedInputText, output)) {
     const enrichmentMessages = buildSparseEnrichmentMessages({
@@ -1033,10 +1369,41 @@ export const processAiJob = async (payloadRaw: AiJobQueuePayload): Promise<void>
           result: enrichmentGeneration.result
         });
 
-        let enrichedOutput = parseValidatedOutput(vertical.outputSchema, vertical.id, enrichmentGeneration.result.text);
+        const parsedEnrichment = await parseValidatedOutputWithRetry({
+          schema: vertical.outputSchema,
+          verticalId: vertical.id,
+          rawText: enrichmentGeneration.result.text,
+          stage: 'enrichment',
+          jobId: record.id,
+          userId: record.user_id,
+          originalMessages: enrichmentMessages,
+          callParams: {
+            taskType,
+            order: generationOrder,
+            maxTokens: Math.max(maxTokens, ENRICHMENT_MIN_MAX_TOKENS[vertical.id] ?? 2600),
+            temperature: Math.min(temperature, 0.3),
+            ollamaModelOverride
+          }
+        });
+        const effectiveEnrichmentGeneration = parsedEnrichment.retryGeneration ?? enrichmentGeneration;
+        if (parsedEnrichment.retryGeneration) {
+          usageCallRecords.push({
+            providerName: parsedEnrichment.retryGeneration.providerName,
+            requestText: [...enrichmentMessages, { role: 'assistant' as const, content: enrichmentGeneration.result.text }]
+              .map((m) => m.content)
+              .join('\n\n'),
+            result: parsedEnrichment.retryGeneration.result
+          });
+        }
+
+        let enrichedOutput = parsedEnrichment.output;
         if (vertical.postProcess) {
           enrichedOutput = await vertical.postProcess(enrichedOutput);
         }
+        enrichedOutput = attachRuntimeModelMetadata(vertical.id, enrichedOutput, {
+          providerName: effectiveEnrichmentGeneration.providerName,
+          model: effectiveEnrichmentGeneration.model
+        });
 
         const baseScore = structuredOutputCompletenessScore(vertical.id, output);
         const enrichedScore = structuredOutputCompletenessScore(vertical.id, enrichedOutput);

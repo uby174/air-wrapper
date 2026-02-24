@@ -80,6 +80,9 @@ export default function DashboardPage() {
               input: {
                 type: 'text' as const,
                 text: textInput.trim()
+              },
+              options: {
+                locale: typeof navigator !== 'undefined' ? navigator.language : 'en-US'
               }
             }
           : {
@@ -87,6 +90,9 @@ export default function DashboardPage() {
               input: {
                 type: 'pdf' as const,
                 storageUrl: String(pdfDataUrl)
+              },
+              options: {
+                locale: typeof navigator !== 'undefined' ? navigator.language : 'en-US'
               }
             };
 

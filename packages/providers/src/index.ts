@@ -594,7 +594,11 @@ export class GoogleProvider implements LLMProvider {
           model: `models/${input.model}`,
           content: {
             parts: [{ text }]
-          }
+          },
+          // Request 1536-dimensional output to match the pgvector column size.
+          // gemini-embedding-001 natively produces 3072 dims; outputDimensionality
+          // truncates it to the requested size via Matryoshka representation learning.
+          outputDimensionality: 1536
         }))
       },
       timeoutMs: input.timeoutMs ?? this.timeoutMs

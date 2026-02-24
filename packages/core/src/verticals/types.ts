@@ -17,6 +17,7 @@ export interface VerticalPromptContext {
   inputText: string;
   context: string;
   useCase: string;
+  locale?: string;
 }
 
 export interface VerticalPiiRule {

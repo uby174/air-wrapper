@@ -56,6 +56,7 @@ export interface JobCreateRequest {
       topK?: number;
     };
     timeoutMs?: number;
+    locale?: string;
   };
 }
 

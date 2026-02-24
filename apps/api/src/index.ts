@@ -709,6 +709,36 @@ app.get('/v1/jobs/:id/result', zValidator('param', jobParamSchema), async (c) =>
   }
 
   if (row.status === 'failed') {
+    let structuredError: Record<string, unknown> | null = null;
+    if (typeof row.error === 'string' && row.error.trim().startsWith('{')) {
+      try {
+        const parsed = JSON.parse(row.error) as unknown;
+        if (
+          parsed &&
+          typeof parsed === 'object' &&
+          (parsed as { statusCode?: unknown }).statusCode === 502 &&
+          typeof (parsed as { code?: unknown }).code === 'string'
+        ) {
+          structuredError = parsed as Record<string, unknown>;
+        }
+      } catch {
+        // Keep legacy 409 error response shape.
+      }
+    }
+
+    if (structuredError) {
+      return c.json(
+        {
+          error:
+            typeof structuredError.message === 'string'
+              ? structuredError.message
+              : 'Structured output validation failed.',
+          details: structuredError
+        },
+        502
+      );
+    }
+
     return c.json(
       {
         id: row.id,
