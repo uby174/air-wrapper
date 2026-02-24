@@ -5,8 +5,8 @@ export const routes = {
   chat: '/v1/chat'
 } as const;
 
-export type TaskType = 'SIMPLE' | 'MEDIUM' | 'COMPLEX';
-export type ProviderName = 'openai' | 'anthropic' | 'google';
+export type TaskType = 'SIMPLE' | 'MEDIUM' | 'COMPLEX' | 'LOCAL';
+export type ProviderName = 'openai' | 'anthropic' | 'google' | 'ollama';
 
 export interface UsageTokens {
   inputTokens?: number;
@@ -36,7 +36,7 @@ export const baseSystemPrompt = [
   'Do not provide harmful instructions.'
 ].join(' ');
 
-const TASK_ORDER = ['SIMPLE', 'MEDIUM', 'COMPLEX'] as const;
+const TASK_ORDER = ['SIMPLE', 'MEDIUM', 'COMPLEX', 'LOCAL'] as const;
 
 const isTaskType = (value: unknown): value is TaskType =>
   typeof value === 'string' && TASK_ORDER.includes(value as TaskType);
@@ -189,6 +189,12 @@ const ROUTE_BY_TASK: Record<TaskType, ModelRoute> = {
     provider: 'google',
     model: 'gemini-pro-latest',
     maxTokens: 1800,
+    cacheable: false
+  },
+  LOCAL: {
+    provider: 'ollama',
+    model: 'qwen2.5:3b',
+    maxTokens: 2000,
     cacheable: false
   }
 };

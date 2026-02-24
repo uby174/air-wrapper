@@ -2,7 +2,6 @@
  * Integration tests for POST /v1/auth/dev-login
  * Covers: happy path, invalid payload, disabled flag behavior
  */
-import { createHmac } from 'node:crypto';
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { beforeEach, describe, expect, it, vi } from 'vitest';

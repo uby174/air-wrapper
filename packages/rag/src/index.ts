@@ -236,20 +236,6 @@ const toVectorLiteral = (vector: number[]): string => {
   return `[${serialized}]`;
 };
 
-const parseVectorLiteral = (input: unknown): number[] => {
-  if (Array.isArray(input)) {
-    return input.map((value) => asFiniteNumber(value));
-  }
-
-  if (typeof input !== 'string') return [];
-  const normalized = input.trim();
-  if (!normalized) return [];
-  const inner = normalized.startsWith('[') && normalized.endsWith(']') ? normalized.slice(1, -1) : normalized;
-  if (!inner.trim()) return [];
-
-  return inner.split(',').map((value) => asFiniteNumber(value.trim()));
-};
-
 const parseMetadata = (raw: unknown): Record<string, unknown> => {
   if (typeof raw === 'object' && raw !== null && !Array.isArray(raw)) {
     return raw as Record<string, unknown>;
