@@ -3,8 +3,41 @@ node_modules
 dist
 .next
 coverage
+
+# Logs
 *.log
+api-dev.log
+web-dev.log
+
+# ── Environment / secrets (never commit real keys) ────────────────────────────
 .env
 .env.local
+.env.development
+.env.production
+.env.staging
+.env.test
+.env.*.local
+# Catch all .env variants (but allow .env.example)
+.env.*
+!.env.example
+
+# ── Private keys & certificates ───────────────────────────────────────────────
+*.pem
+*.key
+*.p12
+*.pfx
+*.cert
+*.crt
+*.csr
+id_rsa
+id_ed25519
+*.jks
+
+# ── OS artifacts ──────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Mobile ────────────────────────────────────────────────────────────────────
 apps/mobile/android
 apps/mobile/ios
