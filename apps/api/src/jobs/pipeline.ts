@@ -880,6 +880,14 @@ const structuredOutputCompletenessScore = (verticalId: string, output: unknown):
       return summaryScore + metricsScore + riskFlagsScore + recommendationsScore;
     }
 
+    case 'insurance_health': {
+      const summaryScore = typeof output.plain_summary === 'string' && output.plain_summary.trim().length > 0 ? 1 : 0;
+      const coveredScore = Math.min(arrayLength(output.what_is_covered), 6) * 2;
+      const notCoveredScore = Math.min(arrayLength(output.what_is_NOT_covered), 6);
+      const risksScore = Math.min(arrayLength(output.risks), 6);
+      return summaryScore + coveredScore + notCoveredScore + risksScore;
+    }
+
     case 'medical_research_summary': {
       const summaryScore =
         typeof output.evidence_summary === 'string' && output.evidence_summary.trim().length > 0 ? 1 : 0;
@@ -897,19 +905,22 @@ const structuredOutputCompletenessScore = (verticalId: string, output: unknown):
 const SPARSE_COMPLETENESS_THRESHOLDS: Partial<Record<string, number>> = {
   legal_contract_analysis: 8,
   medical_research_summary: 9,
-  financial_report_analysis: 8
+  financial_report_analysis: 8,
+  insurance_health: 8
 };
 
 const SPARSE_ENRICH_MIN_INPUT_LENGTH: Partial<Record<string, number>> = {
   legal_contract_analysis: 220,
   medical_research_summary: 200,
-  financial_report_analysis: 180
+  financial_report_analysis: 180,
+  insurance_health: 200
 };
 
 const ENRICHMENT_MIN_MAX_TOKENS: Partial<Record<string, number>> = {
   legal_contract_analysis: 3000,
   medical_research_summary: 3000,
-  financial_report_analysis: 3400
+  financial_report_analysis: 3400,
+  insurance_health: 3000
 };
 
 const isUnderfilledStructuredOutput = (verticalId: string, output: unknown): boolean => {
@@ -935,6 +946,13 @@ const isUnderfilledStructuredOutput = (verticalId: string, output: unknown): boo
       const riskFlags = arrayLength(output.risk_flags);
       const recommendations = arrayLength(output.recommendations);
       return metrics < 2 || riskFlags < 2 || recommendations < 2;
+    }
+
+    case 'insurance_health': {
+      const covered = arrayLength(output.what_is_covered);
+      const notCovered = arrayLength(output.what_is_NOT_covered);
+      const risks = arrayLength(output.risks);
+      return covered < 3 || notCovered < 1 || risks < 2;
     }
 
     default:
@@ -1036,6 +1054,66 @@ const buildSparseEnrichmentMessages = (params: {
           'Include at least 4 key_metrics, 4 risk_flags, and 4 recommendations when evidence exists.',
           'If reporting_period/revenue_numbers/liquidity_position are missing, set them to "Not provided" and list them in missing_info.',
           'Financial report content:',
+          params.inputText,
+          params.context ? `Retrieved context:\n${params.context}` : '',
+          `Previous sparse output:\n${previousJson}`
+        ]
+          .filter(Boolean)
+          .join('\n\n')
+      }
+    ];
+  }
+
+  if (params.verticalId === 'insurance_health') {
+    return [
+      {
+        role: 'system',
+        content:
+          'You are a friendly, knowledgeable health insurance advisor helping ordinary people understand their insurance policy. Return strict JSON only. No markdown code fences. Use plain, simple English. No jargon. Be honest about risks. Be encouraging about genuine benefits. Never give medical advice.'
+      },
+      {
+        role: 'user',
+        content: [
+          'The previous analysis may have missed specific coverage limits or network restrictions.',
+          'Look again for: in-network vs out-of-network rules, prior authorization requirements, mental health parity, prescription drug tiers, and any unusual exclusions.',
+          'Return JSON with keys matching the original schema:',
+          JSON.stringify({
+            plain_summary: 'string',
+            plan_type: 'string',
+            monthly_cost: {
+              premium: 'string',
+              deductible: 'string',
+              out_of_pocket_max: 'string',
+              copays: ['string']
+            },
+            what_is_covered: [
+              { category: 'string', covered: true, details: 'string' }
+            ],
+            what_is_NOT_covered: [
+              { exclusion: 'string', reason: 'string', impact: 'string' }
+            ],
+            risks: [
+              {
+                title: 'string',
+                description: 'string',
+                severity: 'low|medium|high',
+                what_to_watch_out_for: 'string'
+              }
+            ],
+            benefits: [
+              { title: 'string', description: 'string', value_to_you: 'string' }
+            ],
+            most_important: ['string'],
+            questions_to_ask: ['string'],
+            red_flags: ['string'],
+            overall_rating: {
+              score: 0,
+              verdict: 'excellent|good|fair|poor|avoid',
+              one_line_summary: 'string'
+            },
+            disclaimer: 'string'
+          }, null, 2),
+          'Policy Document:',
           params.inputText,
           params.context ? `Retrieved context:\n${params.context}` : '',
           `Previous sparse output:\n${previousJson}`

@@ -98,5 +98,6 @@ export const getVertical = async (useCase: string): Promise<VerticalConfig> => {
 export const seededVerticals = [
   'legal_contract_analysis',
   'medical_research_summary',
-  'financial_report_analysis'
+  'financial_report_analysis',
+  'insurance_health'
 ] as const;
